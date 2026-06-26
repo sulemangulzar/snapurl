@@ -2,7 +2,6 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -16,163 +15,158 @@ class UrlService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create(self, original_url: str, user_id: UUID):
-        try:
-            short_code = None
+    async def create(
+        self,
+        original_url: str,
+        user_id: UUID,
+    ):
+        short_code = None
 
-            for _ in range(5):
-                code = short_code_generation()
+        # Try 5 times to generate a unique short code
+        for _ in range(5):
+            code = short_code_generation()
 
-                result = await self.session.execute(
-                    select(URL).where(URL.short_code == code)
-                )
-
-                existing = result.scalar_one_or_none()
-
-                if existing is None:
-                    short_code = code
-                    break
-
-            if short_code is None:
-                raise HTTPException(
-                    status_code=500, detail="Could not generate unique short code"
-                )
-
-            new_url = URL(
-                original_url=original_url,
-                short_code=short_code,
-                user_id=user_id,
+            result = await self.session.execute(
+                select(URL).where(URL.short_code == code)
             )
 
-            self.session.add(new_url)
-            await self.session.commit()
-            await self.session.refresh(new_url)
+            existing = result.scalar_one_or_none()
 
-            return new_url
-        except HTTPException:
-            raise
-        except SQLAlchemyError:
-            await self.session.rollback()
-            raise HTTPException(status_code=500, detail="Database error while creating URL")
+            if existing is None:
+                short_code = code
+                break
 
-    async def get_all(self, user_id: UUID):
-        try:
-            result = await self.session.execute(select(URL).where(URL.user_id == user_id))
-            urls = result.scalars().all()
+        if short_code is None:
+            raise HTTPException(
+                status_code=500, detail="Could not generate unique short code"
+            )
 
-            if not urls:
-                raise HTTPException(status_code=404, detail="Urls Not Found")
+        new_url = URL(
+            original_url=original_url,
+            short_code=short_code,
+            user_id=user_id,
+        )
 
-            return urls
-        except HTTPException:
-            raise
-        except SQLAlchemyError:
-            raise HTTPException(status_code=500, detail="Database error while fetching URLs")
+        self.session.add(new_url)
+        await self.session.commit()
+        await self.session.refresh(new_url)
+
+        return new_url
+
+    async def get_all(
+        self,
+        user_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+        query: str = "",
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ):
+        from sqlmodel import or_
+
+        stmt = select(URL).where(URL.user_id == user_id)
+        
+        if query:
+            search_term = f"%{query}%"
+            stmt = stmt.where(
+                or_(
+                    URL.short_code.ilike(search_term),
+                    URL.original_url.ilike(search_term),
+                )
+            )
+
+        if sort_by == "clicks":
+            order_col = URL.clicks
+        else:
+            order_col = URL.created_at
+
+        if sort_order == "asc":
+            stmt = stmt.order_by(order_col.asc())
+        else:
+            stmt = stmt.order_by(order_col.desc())
+
+        result = await self.session.execute(stmt.offset(offset).limit(limit))
+        return result.scalars().all()
 
     async def get_url(self, short_code: str, user_id: UUID):
-        try:
-            result = await self.session.execute(
-                select(URL).where(URL.short_code == short_code, URL.user_id == user_id)
-            )
-            url = result.scalar_one_or_none()
+        result = await self.session.execute(
+            select(URL).where(URL.short_code == short_code, URL.user_id == user_id)
+        )
+        url = result.scalar_one_or_none()
 
-            if not url:
-                raise HTTPException(status_code=404, detail="URL Not Found")
+        if not url:
+            raise HTTPException(status_code=404, detail="URL Not Found")
 
-            return url
-        except HTTPException:
-            raise
-        except SQLAlchemyError:
-            raise HTTPException(status_code=500, detail="Database error while fetching URL")
+        return url
 
     async def redirect_to_url(self, short_code: str, ip_address: str, user_agent: str):
-        try:
-            result = await self.session.execute(
-                select(URL).where(URL.short_code == short_code)
-            )
-            url = result.scalar_one_or_none()
+        # Step 1: Find the URL in the database using the short code
+        result = await self.session.execute(
+            select(URL).where(URL.short_code == short_code)
+        )
+        url = result.scalar_one_or_none()
 
-            if not url:
-                raise HTTPException(status_code=404, detail="URL Not Found")
+        # Step 2: If no URL was found, return a 404 error
+        if not url:
+            raise HTTPException(status_code=404, detail="URL Not Found")
 
-            url.clicks += 1
+        # Step 3: Add 1 to the click counter
+        url.clicks += 1
 
-            new_analytic = Analytics(
-                url_id=url.id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-            )
-            self.session.add(new_analytic)
+        # Step 4: Create a new analytics record to log who visited
+        new_analytic = Analytics(
+            url_id=url.id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        self.session.add(new_analytic)
 
-            await self.session.commit()
+        # Step 5: Save both the updated click count AND the new analytics log at the same time
+        await self.session.commit()
 
-            return url
-        except HTTPException:
-            raise
-        except SQLAlchemyError:
-            await self.session.rollback()
-            raise HTTPException(status_code=500, detail="Database error during redirect")
+        return url
 
     async def delete_url(self, short_code: str, user_id: UUID):
-        try:
-            result = await self.session.execute(
-                select(URL).where(URL.short_code == short_code, URL.user_id == user_id)
-            )
-            url = result.scalar_one_or_none()
+        result = await self.session.execute(
+            select(URL).where(URL.short_code == short_code, URL.user_id == user_id)
+        )
+        url = result.scalar_one_or_none()
 
-            if not url:
-                raise HTTPException(status_code=404, detail="URL Not Found")
+        if not url:
+            raise HTTPException(status_code=404, detail="URL Not Found")
 
-            await self.session.delete(url)
-            await self.session.commit()
+        await self.session.delete(url)
+        await self.session.commit()
 
-            return {"message": "URL deleted successfully"}
-        except HTTPException:
-            raise
-        except SQLAlchemyError:
-            await self.session.rollback()
-            raise HTTPException(status_code=500, detail="Database error while deleting URL")
+        return {"message": "URL deleted successfully"}
 
     async def update_url(self, short_code: str, user_id: UUID, data: UrlUpdate):
-        try:
-            result = await self.session.execute(
-                select(URL).where(URL.short_code == short_code, URL.user_id == user_id)
-            )
-            url = result.scalar_one_or_none()
+        result = await self.session.execute(
+            select(URL).where(URL.short_code == short_code, URL.user_id == user_id)
+        )
+        url = result.scalar_one_or_none()
 
-            if not url:
-                raise HTTPException(status_code=404, detail="URL Not Found")
+        if not url:
+            raise HTTPException(status_code=404, detail="URL Not Found")
 
-            url.original_url = data.original_url
-            url.updated_at = datetime.utcnow()
+        url.original_url = data.original_url  # type: ignore
+        url.updated_at = datetime.now()
 
-            await self.session.commit()
-            await self.session.refresh(url)
+        await self.session.commit()
+        await self.session.refresh(url)
 
-            return url
-        except HTTPException:
-            raise
-        except SQLAlchemyError:
-            await self.session.rollback()
-            raise HTTPException(status_code=500, detail="Database error while updating URL")
+        return url
 
-    async def get_analytics(self,short_code : str, user_id :UUID):
-        try:
-            result = await self.session.execute(
-                select(URL).where(URL.short_code == short_code, URL.user_id == user_id)
-            )
-            url = result.scalar_one_or_none()
+    async def get_analytics(self, short_code: str, user_id: UUID):
+        result = await self.session.execute(
+            select(URL).where(URL.short_code == short_code, URL.user_id == user_id)
+        )
+        url = result.scalar_one_or_none()
 
-            if not url:
-                raise HTTPException(status_code=404, detail="URL Not Found")
+        if not url:
+            raise HTTPException(status_code=404, detail="URL Not Found")
 
-            result = await self.session.execute(
-                select(Analytics).where(Analytics.url_id == url.id)
-            )
-            analytics = result.scalars().all()
-
-            return analytics
-        except HTTPException:
-            raise
-        except SQLAlchemyError:
-            raise HTTPException(status_code=500, detail="Database error while fetching analytics")
+        analytics_result = await self.session.execute(
+            select(Analytics).where(Analytics.url_id == url.id)
+        )
+        return analytics_result.scalars().all()

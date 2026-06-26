@@ -10,3 +10,7 @@ class RegisterUser(BaseModel):
 class LoginUser(BaseModel):
     email: EmailStr
     password: str
+
+class UserUpdate(BaseModel):
+    name: str | None = None
+    email: EmailStr | None = None

@@ -1,12 +1,11 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
     from app.models.analytics import Analytics
-    from app.models.qrcode import QRCode
     from app.models.user import User
 
 
@@ -28,5 +27,3 @@ class URL(SQLModel, table=True):
     user: "User" = Relationship(back_populates="urls")
 
     analytics: list["Analytics"] = Relationship(back_populates="url")
-
-    qrcode: "QRCode" = Relationship(back_populates="url")

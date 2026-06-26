@@ -1,8 +1,8 @@
-from app.schemas.analytics import AnalyticsResponse
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.dependencies import UrlServiceDep, get_current_user
 from app.models.user import User
+from app.schemas.analytics import AnalyticsResponse
 from app.schemas.url import UrlCreate, UrlResponse, UrlUpdate
 
 router = APIRouter(prefix="/api/url", tags=["URLs"])
@@ -22,10 +22,16 @@ async def create_short_code(
 
 @router.get("/urls", response_model=list[UrlResponse])
 async def all_urls(
-    service: UrlServiceDep, current_user: User = Depends(get_current_user)
+    service: UrlServiceDep,
+    current_user: User = Depends(get_current_user),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    query: str = Query("", description="Search term for short_code or original_url"),
+    sort_by: str = Query("created_at", description="Field to sort by (created_at, clicks)"),
+    sort_order: str = Query("desc", description="Sort order (asc or desc)"),
 ):
     try:
-        return await service.get_all(current_user.id)
+        return await service.get_all(current_user.id, limit=limit, offset=offset, query=query, sort_by=sort_by, sort_order=sort_order)
     except Exception as e:
         raise e
 
@@ -72,7 +78,7 @@ async def get_analytics(
     short_code: str,
     service: UrlServiceDep,
     current_user: User = Depends(get_current_user),
-):  
+):
     try:
         return await service.get_analytics(short_code, current_user.id)
     except Exception as e:

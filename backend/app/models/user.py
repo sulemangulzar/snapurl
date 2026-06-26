@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class User(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
 
-    name: str = Field(unique=True, nullable=False)
+    name: str = Field(nullable=False)
     email: str = Field(unique=True, nullable=False)
     hashed_password: str = Field(nullable=False)
 

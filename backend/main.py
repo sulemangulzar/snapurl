@@ -1,18 +1,23 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from scalar_fastapi import get_scalar_api_reference
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routes import url, user
-from app.database import create_all_tables, get_session
+from app.api.routes import qrcode, url, user
+from app.config import settings
+from app.database import get_session
+from app.limiter import limiter
 from app.services.url import UrlService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await create_all_tables()
+    # Tables are managed by Alembic migrations only — do NOT call create_all_tables() here.
     yield
 
 
@@ -22,6 +27,17 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,
+)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -35,6 +51,7 @@ async def scalar_html():
 
 app.include_router(user.router)
 app.include_router(url.router)
+app.include_router(qrcode.router)
 
 
 @app.get("/")
@@ -43,18 +60,31 @@ def health():
 
 
 @app.get("/{short_code}", include_in_schema=False)
+@limiter.limit("60/minute")
 async def redirect_to_original(
     request: Request,
     short_code: str,
     session: AsyncSession = Depends(get_session),
 ):
-    # Extract visitor's IP address and browser info from the request
-    # request.client can sometimes be None (e.g. behind a proxy), so we use a fallback
-    ip_address = request.client.host if request.client else "unknown"
-    user_agent = request.headers.get("user-agent", "unknown")
-
     service = UrlService(session)
-    url = await service.redirect_to_url(short_code, ip_address, user_agent)
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    
+    try:
+        url_obj = await service.redirect_to_url(short_code, ip_address, user_agent)
+    except HTTPException as e:
+        if e.status_code == 404:
+            # Redirect to the frontend 404 route
+            frontend_url = "http://localhost:5173"  # Adjust for production based on deployment
+            if hasattr(settings, "FRONTEND_URL") and settings.FRONTEND_URL:
+                frontend_url = settings.FRONTEND_URL
+            return RedirectResponse(f"{frontend_url}/404")
+        raise
 
-    # Send the visitor to the original destination URL
-    return RedirectResponse(url.original_url)
+    target = url_obj.original_url
+
+    if not target.startswith(("http://", "https://")):
+        target = f"https://{target}"
+
+    return RedirectResponse(target)
+

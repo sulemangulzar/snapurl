@@ -1,12 +1,12 @@
 from typing import Annotated
 from uuid import UUID
 
+import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
+from app.core.jwt import decode_token
 from app.database import get_session
 from app.services.url import UrlService
 from app.services.user import UserService
@@ -28,20 +28,23 @@ async def get_current_user(
     token=Depends(oauth_scheme), session: AsyncSession = Depends(get_session)
 ):
     credentials_exception = HTTPException(
-        status_code=401, detail="Could not validate credentials"
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
     )
 
     try:
-        payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
-        )
+        payload = decode_token(token)
+
+        # Reject refresh tokens used as access tokens
+        if payload.get("type") not in ("access", None):
+            raise credentials_exception
 
         user_id = payload.get("sub")
-
         if user_id is None:
             raise credentials_exception
 
-    except JWTError:
+    except jwt.InvalidTokenError:
         raise credentials_exception
 
     user_service = UserService(session)
@@ -58,3 +61,4 @@ def get_url_service(session: AsyncSession = Depends(get_session)):
 
 
 UrlServiceDep = Annotated[UrlService, Depends(get_url_service)]
+
