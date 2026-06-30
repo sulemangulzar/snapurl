@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request, Response, HTTPException
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from scalar_fastapi import get_scalar_api_reference
@@ -69,22 +69,11 @@ async def redirect_to_original(
     service = UrlService(session)
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
-    
-    try:
-        url_obj = await service.redirect_to_url(short_code, ip_address, user_agent)
-    except HTTPException as e:
-        if e.status_code == 404:
-            # Redirect to the frontend 404 route
-            frontend_url = "http://localhost:5173"  # Adjust for production based on deployment
-            if hasattr(settings, "FRONTEND_URL") and settings.FRONTEND_URL:
-                frontend_url = settings.FRONTEND_URL
-            return RedirectResponse(f"{frontend_url}/404")
-        raise
 
+    url_obj = await service.redirect_to_url(short_code, ip_address, user_agent)
     target = url_obj.original_url
 
     if not target.startswith(("http://", "https://")):
         target = f"https://{target}"
 
     return RedirectResponse(target)
-
