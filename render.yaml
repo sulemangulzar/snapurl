@@ -26,7 +26,7 @@ services:
           name: snapurl-db
           property: connectionString
       - key: ALLOWED_ORIGINS
-        value: '["http://localhost:5173","https://snapurl-fdkn3kn04-muhammad-sulemans-projects-494c53f6.vercel.app"]'
+        value: "http://localhost:5173,https://snapurl-xi.vercel.app"
       - key: ALLOWED_ORIGIN_REGEX
         value: '^https://.*\\.vercel\\.app$'
       - key: BASE_URL
